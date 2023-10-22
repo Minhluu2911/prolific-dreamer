@@ -84,14 +84,14 @@ class Codebook(nn.Module):
             self.embedding = nn.Embedding(self.num_codebook_vectors, self.latent_dim)
         # self.embedding.weight.data.uniform_(-1.0 / self.num_codebook_vectors, 1.0 / self.num_codebook_vectors)
 
-        # self.generator = Generator(z_dim=self.latent_dim, # Input latent (Z) dimensionality.
-        #                            c_dim=0, # Conditioning label (C) dimensionality.
-        #                            w_dim=128, # Intermediate latent (W) dimensionality.
-        #                            img_resolution=64, # Output resolution.
-        #                            img_channels=4, # Number of output color channels.
-        #                            )
+        self.generator = Generator(z_dim=self.latent_dim, # Input latent (Z) dimensionality.
+                                   c_dim=0, # Conditioning label (C) dimensionality.
+                                   w_dim=128, # Intermediate latent (W) dimensionality.
+                                   img_resolution=64, # Output resolution.
+                                   img_channels=4, # Number of output color channels.
+                                   )
 
-        self.generator = SmallGenerator(self.latent_dim)
+        # self.generator = SmallGenerator(self.latent_dim)
 
     def forward(self, B):
         # z = z.permute(0, 2, 3, 1).contiguous()
