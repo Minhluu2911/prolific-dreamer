@@ -100,6 +100,26 @@ def get_parser(**parser_kwargs):
     parser.add_argument('--loss_weight_type', type=str, default='none', help='type of loss weight')
     parser.add_argument('--nerf_init', type=str2bool, default=False, help='initialize with diffusion models as mean predictor')
     parser.add_argument('--grad_scale', type=float, default=1., help='grad_scale for loss in vsd')
+
+
+    parser.add_argument('--latent-dim', type=int, default=256, help='Latent dimension n_z (default: 256)')
+    parser.add_argument('--image-size', type=int, default=256, help='Image height and width (default: 256)')
+    parser.add_argument('--num-codebook-vectors', type=int, default=1, help='Number of codebook vectors (default: 16)')
+    parser.add_argument('--beta', type=float, default=0.25, help='Commitment loss scalar (default: 0.25)')
+    parser.add_argument('--image-channels', type=int, default=3, help='Number of channels of images (default: 3)')
+    parser.add_argument('--dataset-path', type=str, default='/data', help='Path to data (default: /data)')
+    parser.add_argument('--device', type=str, default="cuda", help='Which device the training is on')
+    parser.add_argument('--batch-size', type=int, default=6, help='Input batch size for training (default: 6)')
+    parser.add_argument('--epochs', type=int, default=100, help='Number of epochs to train (default: 50)')
+    parser.add_argument('--learning-rate', type=float, default=2.25e-05, help='Learning rate (default: 0.0002)')
+    parser.add_argument('--beta1', type=float, default=0.5, help='Adam beta param (default: 0.0)')
+    parser.add_argument('--beta2', type=float, default=0.9, help='Adam beta param (default: 0.999)')
+    parser.add_argument('--disc-start', type=int, default=10000, help='When to start the discriminator (default: 0)')
+    parser.add_argument('--disc-factor', type=float, default=1., help='')
+    parser.add_argument('--rec-loss-factor', type=float, default=1., help='Weighting factor for reconstruction loss.')
+    parser.add_argument('--perceptual-loss-factor', type=float, default=1., help='Weighting factor for perceptual loss.')
+    parser.add_argument('--codebook_interpolate', type=str2bool, default=False)
+    
     args = parser.parse_args()
     # create working directory
     args.run_id = args.run_date + '_' + args.run_time
@@ -137,6 +157,7 @@ class nullcontext:
 
 def main():
     args = get_parser()
+    
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     dtype = torch.float32 # use float32 by default
     image_name = args.prompt.replace(' ', '_')
@@ -310,7 +331,13 @@ def main():
         if args.phi_model in ['lora', 'unet_simple']:
             phi_optimizer = torch.optim.AdamW([{"params": phi_params, "lr": args.phi_lr}], lr=args.phi_lr)
             print(f'number of trainable parameters of phi model in optimizer: {sum(p.numel() for p in phi_params if p.requires_grad)}')
-    optimizer = get_optimizer(particles_to_optimize, args)
+    
+    from codebook import Codebook
+    codebook = Codebook(args).to(device)
+
+    for param in codebook.parameters():
+        print(param.shape)
+    optimizer = get_optimizer(codebook.parameters(), args)
     if args.use_scheduler:
         lr_scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, \
             start_factor=args.lr_scheduler_start_factor, total_iters=args.lr_scheduler_iters)
@@ -380,15 +407,20 @@ def main():
     ### sds text to image generation
     elif args.generation_mode in ['sds', 'vsd']:
         cross_attention_kwargs = {'scale': args.lora_scale} if (args.generation_mode == 'vsd' and args.phi_model == 'lora') else {}
+        
         for step, chosen_t in enumerate(pbar):
+            '''
             # get latent of all particles
             latents = get_latents(particles, vae, args.rgb_as_latents, use_mlp_particle=args.use_mlp_particle)
-            t = torch.tensor([chosen_t]).to(device)
+            
             ######## q sample #########
             # random sample particle_num_vsd particles from latents
             indices = torch.randperm(latents.size(0))
             latents_vsd = latents[indices[:args.particle_num_vsd]]
+            '''
+            latents_vsd = codebook(args.batch_size)
             noise = torch.randn_like(latents_vsd)
+            t = torch.tensor([chosen_t]).to(device)
             noisy_latents = scheduler.add_noise(latents_vsd, noise, t)
             ######## Do the gradient for latents!!! #########
             optimizer.zero_grad()
@@ -427,11 +459,15 @@ def main():
                         t_phi = torch.tensor([t_phi]).to(device)
                     else:
                         t_phi = t
+                    '''
                     # random sample particle_num_phi particles from latents
                     indices = torch.randperm(latents.size(0))
                     latents_phi = latents[indices[:args.particle_num_phi]]
+                    '''
+                    latents_phi = codebook(args.batch_size)
                     noise_phi = torch.randn_like(latents_phi)
                     noisy_latents_phi = scheduler.add_noise(latents_phi, noise_phi, t_phi)
+                    # NOTE
                     loss_phi = phi_vsd_grad_diffuser(unet_phi, noisy_latents_phi.detach(), noise_phi, text_embeddings_phi, t_phi, \
                                                      cross_attention_kwargs=cross_attention_kwargs, scheduler=scheduler, \
                                                         lora_v=args.lora_vprediction, half_inference=args.half_inference)
